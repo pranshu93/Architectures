@@ -1,17 +1,21 @@
 from __future__ import print_function, division
-import torch
-from torch import FloatTensor as FT
-from torch import LongTensor as LT
-from math import *
-from torch.autograd import Variable
-import torch.nn as nn
-import torch.optim as optim
+import torch; from torch import FloatTensor as FT; from torch import LongTensor as LT;
+from torch.autograd import Variable; import torch.nn as nn; import torch.optim as optim; import torch.nn.functional as F;
 import numpy as np
-from time import time
-import torch.nn.functional as F
 
-torch.manual_seed(42)
-np.random.seed(42)
+torch.manual_seed(42); np.random.seed(42)
+
+def forward_iter(data, labels, index, code):
+    num_points = index.__getattribute__('stop') - index.__getattribute__('start') 
+    batchx, batchy = Variable(FT(data[index])), Variable(LT(labels[index]))
+    outputs = bonsai(batchx)
+    if(code):
+        optimizer.zero_grad()
+        loss = loss_function(outputs, batchy); loss.backward();
+        optimizer.step()
+    else:
+        _, predictions = torch.max(outputs, 1)
+        print(float(torch.sum((predictions == batchy).data))/num_points)
 
 def ht(A, s):
     A_ = np.copy(A)
@@ -29,41 +33,6 @@ def cs(src, dest):
     dest[support] = dest_[support]
     return dest
 
-train_data = []
-train_labels = []
-X = np.load("/home/cse/phd/anz178419/Datasets/MNIST10/train.npy")
-Y = np.load("/home/cse/phd/anz178419/Datasets/MNIST10/test.npy")
-X = np.concatenate((X,np.ones((X.__len__(),1))),axis=1)
-Y = np.concatenate((Y,np.ones((Y.__len__(),1))),axis=1)
-train_data = X[:,1:]
-train_labels = X[:,0]
-test_data = Y[:,1:]
-test_labels = Y[:,0]
-
-mean=np.mean(train_data,0)
-std=np.std(train_data,0)
-std[std[:]<0.00001]=1
-train_data=(train_data-mean)/std
-test_data=(test_data-mean)/std
-
-h = 3
-pd = 20
-nf = int(train_data.shape[1])
-nc = int(np.max(train_labels)) - int(np.min(train_labels)) + 1
-train_labels = np.array(train_labels - np.min(train_labels),dtype=int)
-test_labels = np.array(test_labels - np.min(test_labels),dtype=int)
-
-lT = 1e-2
-lW = 1e-2
-lV = 1e-2
-lZ = 1e-3
-sT = 0.5
-sW = 0.5
-sV = 0.5
-sZ = 0.1
-batch_size = 100
-sig = 4
-
 class Bonsai(nn.Module):
     def __init__(self,h,pd,nf,nc,lT,lW,lV,lZ,sT,sW,sV,sZ,sig):
         super(Bonsai, self).__init__()
@@ -76,7 +45,7 @@ class Bonsai(nn.Module):
         self.sig = sig
         
         self.Z = nn.Parameter(FT(torch.rand(self.nf, self.pd))-0.5)
-        if(self.int_n > 0): self.T = nn.Parameter(torch.FloatTensor(torch.rand(self.int_n, self.pd))-0.5)
+        if(self.int_n > 0): self.T = nn.Parameter(FT(torch.rand(self.int_n, self.pd))-0.5)
         self.V = nn.Parameter(FT(torch.rand(self.tot_n, self.pd, self.nc)) - 0.5)
         self.W = nn.Parameter(FT(torch.rand(self.tot_n, self.pd, self.nc)) - 0.5)
 
@@ -86,7 +55,7 @@ class Bonsai(nn.Module):
         I = Variable(FT(torch.ones(batch_size, self.tot_n)))
         if(self.int_n > 0):
             for i in range(1,self.tot_n):
-                j = int(floor((i + 1) / 2) - 1)
+                j = int(np.floor((i + 1) / 2) - 1)
                 I[:, i] = 0.5 * I[:, j] * (1 + pow(-1, (i + 1) - 2 * (j + 1)) * F.tanh(self.sigI * torch.matmul(pp, self.T[j])))
         score = (torch.matmul(pp, self.W) * F.tanh(self.sig * torch.matmul(pp, self.V)) * torch.t(I).view(self.tot_n, batch_size, 1)).sum(0)
         return score
@@ -99,61 +68,49 @@ class Bonsai(nn.Module):
         total_loss = reg_loss + class_loss
         return total_loss
 
+train_data = []; train_labels = []
+fileloc = "/home/cse/phd/anz178419/Datasets/MNIST10/"
+X = np.load(fileloc + "train.npy"); Y = np.load(fileloc + "test.npy")
+X = np.concatenate((X,np.ones((X.__len__(),1))),axis=1); Y = np.concatenate((Y,np.ones((Y.__len__(),1))),axis=1)
+train_data = X[:,1:]; train_labels = X[:,0]; test_data = Y[:,1:]; test_labels = Y[:,0]
+
+mean=np.mean(train_data,0); std=np.std(train_data,0); std[std[:]<0.00001]=1
+train_data=(train_data-mean)/std; test_data=(test_data-mean)/std
+
+h = 4; pd = 20;
+nf = int(train_data.shape[1]); nc = int(np.max(train_labels)) - int(np.min(train_labels)) + 1
+train_labels = np.array(train_labels - np.min(train_labels),dtype=int); test_labels = np.array(test_labels - np.min(test_labels),dtype=int)
+
+lT = 1e-2; lW = 1e-2; lV = 1e-2; lZ = 1e-3
+sT = 0.5; sW = 0.5; sV = 0.5; sZ = 0.1;
+batch_size = 100; sig = 4; total_epochs = 5
+
 bonsai = Bonsai(h,pd,nf,nc,lT,lW,lV,lZ,sT,sW,sV,sZ,sig)
 loss_function = lambda x,y: bonsai.multi_class_loss(x,y)
 optimizer = optim.SGD(bonsai.parameters(),lr=0.01,momentum=0.9,nesterov=True)
 #optimizer = optim.Adadelta(bonsai.parameters(),lr=0.01)
 
-total_epochs = 500
-num_iters = int(train_data.shape[0]/batch_size)
-total_batches = num_iters * total_epochs
-ctr = 0
-if bonsai.nc > 2:
-	trim_l = 15
-else:
-	trim_l = 5
-iht_done = 0
+num_iters = int(train_data.shape[0]/batch_size); total_batches = num_iters * total_epochs
+trim_l = 15 if bonsai.nc > 2 else 5
+ctr = 0; iht_done = 0
 
 for i in range(total_epochs):
-
     for j in range(num_iters):
-
-        if ((ctr == 0) or (ctr == total_batches/3) or (ctr == 2*total_batches/3)):
-            bonsai.sigI = 1
-            iters_phase = 0
-
+        if ((ctr == 0) or (ctr == total_batches/3) or (ctr == 2*total_batches/3)): bonsai.sigI = 1; iters_phase = 0;
         elif (iters_phase%100 == 0):
             indices = np.random.choice(train_data.shape[0],100)
             batch_x = train_data[indices,:]
-            T = bonsai.T.data.numpy()
-            Z = bonsai.Z.data.numpy()
-            batch_pp = np.matmul(batch_x,Z)
-            
+            T = bonsai.T.data.numpy(); Z = bonsai.Z.data.numpy()
+            batch_pp = np.matmul(batch_x,Z)            
             sum_tr = 0.0
-
-            for k in range(0, bonsai.int_n):
-                sum_tr = sum_tr + (np.sum(np.abs(np.dot(batch_pp,T[k]))))
-
-            if(bonsai.int_n > 0):
-                sum_tr = sum_tr/(100*bonsai.int_n)
-                sum_tr = 0.1/sum_tr
-            else:
-                sum_tr = 0.1
+            for k in range(0, bonsai.int_n): sum_tr = sum_tr + (np.sum(np.abs(np.dot(batch_pp,T[k]))));
+            if(bonsai.int_n > 0): sum_tr = sum_tr/(100*bonsai.int_n); sum_tr = 0.1/sum_tr;
+            else: sum_tr = 0.1;
             sum_tr = min(1000,sum_tr*(2**(float(iters_phase)/(float(total_batches)/30.0))))
-
             bonsai.sigI = float(sum_tr)
 
         iters_phase = iters_phase + 1
-
-        optimizer.zero_grad()
-        batchx = train_data[j * batch_size:(j + 1) * batch_size, :]
-        batchy = train_labels[j * batch_size:(j + 1) * batch_size]
-        inputs, labels = FT(batchx).view(batch_size, nf), LT(batchy).view(batch_size)
-        inputs, labels = Variable(inputs), Variable(labels)
-        outputs = bonsai(inputs)
-        loss = loss_function(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        forward_iter(train_data,train_labels,slice(j*batch_size,(j+1)*batch_size),True)	
         
         if (ctr >= (total_batches/3) and (ctr < 2*total_batches/3) and ctr%trim_l == 0):
             W_old = bonsai.W.data.numpy(); V_old = bonsai.V.data.numpy(); Z_old = bonsai.Z.data.numpy(); T_old = bonsai.T.data.numpy()
@@ -167,19 +124,6 @@ for i in range(total_epochs):
             
         ctr = ctr + 1
 
-    acc = 0
-    sigI_old = bonsai.sigI
-    bonsai.sigI = 1e9
-
-    batchx = test_data 
-    batchy = test_labels 
-    inputs, labels = FT(batchx).view(test_data.shape[0],nf), LT(batchy).view(test_data.shape[0])
-    inputs, labels = Variable(inputs), Variable(labels)
-    outputs = bonsai(inputs)
-    _, predictions = torch.max(outputs, 1)
-    acc = ((predictions == labels).sum()).data.numpy().tolist()
-    end = time()
-    bonsai.sigI = sigI_old
-    print(float(acc) / Y.__len__())
-
-
+    sigI_old = bonsai.sigI; bonsai.sigI = 1e9
+    forward_iter(test_data,test_labels,slice(0,test_data.shape[0]),False)
+    bonsai.sigI = sigI_old	
